@@ -3,12 +3,12 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 
-// Nodemailer Transporter Setup (আপনার জিমেইল বা অটোমেশন SMTP দিয়ে)
+// Nodemailer Transporter Setup
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER, // আপনার .env ফাইলে থাকতে হবে
-    pass: process.env.EMAIL_PASS  // আপনার .env ফাইলে থাকতে হবে
+    user: process.env.EMAIL_USER, 
+    pass: process.env.EMAIL_PASS  
   }
 });
 
@@ -32,10 +32,10 @@ exports.register = async (req, res) => {
     let otpExpire = null;
     let isVerified = true; // বায়ারের জন্য সরাসরি ভেরিফাইড
 
-    // যদি ভেন্ডর বা সেলার হয়, তবে ওটিপি জেনারেট হবে এবং একাউন্ট আনভেরিফাইড থাকবে
+    // যদি ভেন্ডর বা সেলার হয়, তবে ওটিপি জেনারেট হবে এবং একাউন্ট আনভেরিফাইড থাকবে
     if (userRole === 'vendor' || userRole === 'seller') {
       otpCode = Math.floor(100000 + Math.random() * 900000).toString(); // ৬ ডিজিটের ওটিপি
-      otpExpire = Date.now() + 10 * 60 * 1000; // ১০ মিনিট মেয়াদ
+      otpExpire = Date.now() + 5 * 60 * 1000; // ৫ মিনিট মেয়াদ (আপডেট করা হয়েছে)
       isVerified = false; 
     }
 
@@ -54,14 +54,14 @@ exports.register = async (req, res) => {
 
     await user.save();
 
-    // যদি ভেন্ডর হয়, তবে স্বয়ংক্রিয়ভাবে মেইলে ওটিপি পাঠিয়ে দেওয়া হবে
+    // যদি ভেন্ডর হয়, তবে স্বয়ংক্রিয়ভাবে মেইলে ওটিপি পাঠিয়ে দেওয়া হবে
     if (userRole === 'vendor' || userRole === 'seller') {
       try {
         await transporter.sendMail({
-          from: '"Multi-Vendor E-Commerce" <no-reply@yourdomain.com>',
+          from: process.env.EMAIL_USER, // ফিক্সড: জিমেইল ইউজার ব্যবহার করা হয়েছে
           to: email,
           subject: 'Your Vendor Account Verification OTP',
-          html: `<h3>Hello ${name},</h3><p>Your OTP code for vendor registration is: <b>${otpCode}</b></p><p>This code is valid for 10 minutes.</p>`
+          html: `<h3>Hello ${name},</h3><p>Your OTP code for vendor registration is: <b>${otpCode}</b></p><p>This code is valid for 5 minutes.</p>`
         });
       } catch (mailError) {
         console.log('Email send failed:', mailError);
@@ -96,7 +96,8 @@ exports.verifyOtp = async (req, res) => {
       return res.status(400).json({ message: 'Account is already verified.' });
     }
 
-    if (user.otpCode !== otpCode) {
+    // টাইপ সমস্যা এড়াতে স্ট্রিং এ রূপান্তর করে তুলনা করা হলো
+    if (String(user.otpCode) !== String(otpCode)) {
       return res.status(400).json({ message: 'Invalid OTP code' });
     }
 
@@ -110,7 +111,7 @@ exports.verifyOtp = async (req, res) => {
     user.otpExpire = undefined;
     await user.save();
 
-    // টোকেন জেনারেট করে দেওয়া যাতে ভেরিফায়ার পর সরাসরি ড্যাশবোর্ডে চলে যেতে পারে
+    // টোকেন জেনারেট করে দেওয়া যাতে ভেরিফায়ার পর সরাসরি ড্যাশবোর্ডে চলে যেতে পারে
     const token = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET || 'your_super_secret_key_here',
