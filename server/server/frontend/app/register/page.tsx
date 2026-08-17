@@ -45,13 +45,15 @@ export default function RegisterPage() {
         dataForm.append('profileImage', profileImage);
       }
 
+      // ডায়নামিক API URL সেটআপ (লোকালে ৫০০০ পোর্ট এবং লাইভে রেন্ডার ইউআরএল ব্যবহার করবে)
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
       const response = await fetch(`${API_URL}/api/auth/register`, {
         method: 'POST',
-        body: dataForm
+        body: dataForm // FormData পাঠানোর সময় Headers এ Content-Type দিতে হয় না
       });
 
+      // সেফলি রেসপন্স পার্স করার জন্য
       const contentType = response.headers.get('content-type');
       let data;
       if (contentType && contentType.includes('application/json')) {
@@ -64,10 +66,13 @@ export default function RegisterPage() {
         throw new Error(data.message || 'Registration failed');
       }
 
-      // ওটিপি অংশ বাদ দিয়ে সরাসরি সফল মেসেজ ও লগইন পেজে রিডায়রেক্ট করা হলো
-      alert('Registration successful! Please login.');
-      router.push('/login');
-
+      // যদি ভেন্ডর হয় এবং ব্যাকএন্ডে ওটিপি ভেরিফিকেশন রিকোয়ার্ড থাকে
+      if (role === 'vendor' && data.requiresOtp) {
+        router.push(`/verify-otp?email=${encodeURIComponent(formData.email)}`);
+      } else {
+        alert('Registration successful! Please login.');
+        router.push('/login');
+      }
     } catch (err: any) {
       setError(err.message || 'Something went wrong');
     } finally {

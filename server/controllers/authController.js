@@ -1,18 +1,8 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 
-// Nodemailer Transporter Setup
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER, 
-    pass: process.env.EMAIL_PASS  
-  }
-});
-
-// 1. Register (Buyer & Vendor)
+// 1. Register (Buyer & Vendor - No OTP)
 exports.register = async (req, res) => {
   try {
     const { name, email, password, role, shopNumber, nidNumber } = req.body;
@@ -28,16 +18,8 @@ exports.register = async (req, res) => {
 
     const userRole = role || 'buyer';
     
-    let otpCode = null;
-    let otpExpire = null;
-    let isVerified = true; // বায়ারের জন্য সরাসরি ভেরিফাইড
-
-    // যদি ভেন্ডর বা সেলার হয়, তবে ওটিপি জেনারেট হবে এবং একাউন্ট আনভেরিফাইড থাকবে
-    if (userRole === 'vendor' || userRole === 'seller') {
-      otpCode = Math.floor(100000 + Math.random() * 900000).toString(); // ৬ ডিজিটের ওটিপি
-      otpExpire = Date.now() + 5 * 60 * 1000; // ৫ মিনিট মেয়াদ (আপডেট করা হয়েছে)
-      isVerified = false; 
-    }
+    // ওটিপি বাদ দেওয়া হয়েছে, তাই সবার অ্যাকাউন্টই সরাসরি ভেরিফাইড হবে
+    let isVerified = true; 
 
     user = new User({
       name,
@@ -47,88 +29,14 @@ exports.register = async (req, res) => {
       shopNumber: userRole === 'vendor' ? shopNumber : undefined,
       nidNumber: userRole === 'vendor' ? nidNumber : undefined,
       profileImage,
-      otpCode,
-      otpExpire,
       isVerified
     });
 
     await user.save();
 
-    // যদি ভেন্ডর হয়, তবে স্বয়ংক্রিয়ভাবে মেইলে ওটিপি পাঠিয়ে দেওয়া হবে
-    if (userRole === 'vendor' || userRole === 'seller') {
-      try {
-        await transporter.sendMail({
-          from: process.env.EMAIL_USER, // ফিক্সড: জিমেইল ইউজার ব্যবহার করা হয়েছে
-          to: email,
-          subject: 'Your Vendor Account Verification OTP',
-          html: `<h3>Hello ${name},</h3><p>Your OTP code for vendor registration is: <b>${otpCode}</b></p><p>This code is valid for 5 minutes.</p>`
-        });
-      } catch (mailError) {
-        console.log('Email send failed:', mailError);
-      }
-      
-      return res.status(201).json({ 
-        message: 'Registration successful! Please check your email for the OTP code.',
-        requiresOtp: true,
-        email: user.email
-      });
-    }
-
-    // বায়ারের জন্য সরাসরি সাকসেস মেসেজ
-    res.status(201).json({ message: 'Buyer registered successfully! You can login now.' });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-// 2. Verify OTP (For Vendors)
-exports.verifyOtp = async (req, res) => {
-  try {
-    const { email, otpCode } = req.body;
-
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(400).json({ message: 'User not found' });
-    }
-
-    if (user.isVerified) {
-      return res.status(400).json({ message: 'Account is already verified.' });
-    }
-
-    // টাইপ সমস্যা এড়াতে স্ট্রিং এ রূপান্তর করে তুলনা করা হলো
-    if (String(user.otpCode) !== String(otpCode)) {
-      return res.status(400).json({ message: 'Invalid OTP code' });
-    }
-
-    if (user.otpExpire < Date.now()) {
-      return res.status(400).json({ message: 'OTP code has expired. Please register again or request a new one.' });
-    }
-
-    // ভেরিফিকেশন সফল হলে
-    user.isVerified = true;
-    user.otpCode = undefined;
-    user.otpExpire = undefined;
-    await user.save();
-
-    // টোকেন জেনারেট করে দেওয়া যাতে ভেরিফায়ার পর সরাসরি ড্যাশবোর্ডে চলে যেতে পারে
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET || 'your_super_secret_key_here',
-      { expiresIn: '7d' }
-    );
-
-    res.json({
-      message: 'Account verified successfully!',
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        shopNumber: user.shopNumber,
-        profileImage: user.profileImage
-      }
+    res.status(201).json({ 
+      message: 'Registration successful! You can login now.',
+      requiresOtp: false 
     });
 
   } catch (err) {
@@ -136,7 +44,7 @@ exports.verifyOtp = async (req, res) => {
   }
 };
 
-// 3. Login
+// 2. Login
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -144,15 +52,6 @@ exports.login = async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(400).json({ message: 'Invalid Email or Password' });
-    }
-
-    // ভেন্ডর হলে একাউন্ট ওটিপি ভেরিফাইড কিনা চেক করা
-    if ((user.role === 'vendor' || user.role === 'seller') && !user.isVerified) {
-      return res.status(400).json({ 
-        message: 'Please verify your account with the OTP sent to your email first.',
-        requiresOtp: true,
-        email: user.email
-      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
