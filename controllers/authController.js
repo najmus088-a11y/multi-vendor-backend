@@ -19,7 +19,10 @@ exports.register = async (req, res) => {
     const profileImage = req.file ? `/uploads/${req.file.filename}` : '';
 
     let user = await User.findOne({ email });
-    if (user) {
+    
+    // যদি ইউজার আগে থেকেই থাকে এবং আনভেরিফাইড হয়, তবে তাকে আপডেট করে নতুন ওটিপি দিতে পারি বা আগেরটি রাখতে পারি। 
+    // তবে সহজ রাখার জন্য ডুপ্লিকেট চেক রাখা হলো:
+    if (user && user.isVerified) {
       return res.status(400).json({ message: 'User already exists with this email' });
     }
 
@@ -30,39 +33,53 @@ exports.register = async (req, res) => {
     
     let otpCode = null;
     let otpExpire = null;
-    let isVerified = true; // বায়ারের জন্য সরাসরি ভেরিফাইড
+    let isVerified = true; 
 
-    // যদি ভেন্ডর বা সেলার হয়, তবে ওটিপি জেনারেট হবে এবং একাউন্ট আনভেরিফাইড থাকবে
+    // যদি ভেন্ডর বা সেলার হয়
     if (userRole === 'vendor' || userRole === 'seller') {
       otpCode = Math.floor(100000 + Math.random() * 900000).toString(); // ৬ ডিজিটের ওটিপি
-      otpExpire = Date.now() + 5 * 60 * 1000; // ৫ মিনিট মেয়াদ (আপডেট করা হয়েছে)
+      otpExpire = Date.now() + 5 * 60 * 1000; // ৫ মিনিট মেয়াদ
       isVerified = false; 
     }
 
-    user = new User({
-      name,
-      email,
-      password: hashedPassword,
-      role: userRole,
-      shopNumber: userRole === 'vendor' ? shopNumber : undefined,
-      nidNumber: userRole === 'vendor' ? nidNumber : undefined,
-      profileImage,
-      otpCode,
-      otpExpire,
-      isVerified
-    });
+    if (user && !user.isVerified) {
+      // যদি ইউজার অলরেডি ডাটাবেজে থাকে কিন্তু ভেরিফাইড না হয়, তবে তার তথ্য আপডেট করে নতুন ওটিপি দেবো
+      user.name = name;
+      user.password = hashedPassword;
+      user.role = userRole;
+      user.shopNumber = userRole === 'vendor' ? shopNumber : undefined;
+      user.nidNumber = userRole === 'vendor' ? nidNumber : undefined;
+      user.profileImage = profileImage || user.profileImage;
+      user.otpCode = otpCode;
+      user.otpExpire = otpExpire;
+    } else {
+      // নতুন ইউজার তৈরি
+      user = new User({
+        name,
+        email,
+        password: hashedPassword,
+        role: userRole,
+        shopNumber: userRole === 'vendor' ? shopNumber : undefined,
+        nidNumber: userRole === 'vendor' ? nidNumber : undefined,
+        profileImage,
+        otpCode,
+        otpExpire,
+        isVerified
+      });
+    }
 
     await user.save();
 
-    // যদি ভেন্ডর হয়, তবে স্বয়ংক্রিয়ভাবে মেইলে ওটিপি পাঠিয়ে দেওয়া হবে
+    // যদি ভেন্ডর হয়, তবে মেইলে ওটিপি পাঠানো হবে
     if (userRole === 'vendor' || userRole === 'seller') {
       try {
         await transporter.sendMail({
-          from: process.env.EMAIL_USER, // ফিক্সড: জিমেইল ইউজার ব্যবহার করা হয়েছে
+          from: process.env.EMAIL_USER,
           to: email,
           subject: 'Your Vendor Account Verification OTP',
           html: `<h3>Hello ${name},</h3><p>Your OTP code for vendor registration is: <b>${otpCode}</b></p><p>This code is valid for 5 minutes.</p>`
         });
+        console.log(`OTP sent to ${email}: ${otpCode}`); // টার্মিনালে ওটিপি দেখার জন্য
       } catch (mailError) {
         console.log('Email send failed:', mailError);
       }
@@ -74,7 +91,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // বায়ারের জন্য সরাসরি সাকসেস মেসেজ
     res.status(201).json({ message: 'Buyer registered successfully! You can login now.' });
 
   } catch (err) {
@@ -96,13 +112,21 @@ exports.verifyOtp = async (req, res) => {
       return res.status(400).json({ message: 'Account is already verified.' });
     }
 
-    // টাইপ সমস্যা এড়াতে স্ট্রিং এ রূপান্তর করে তুলনা করা হলো
-    if (String(user.otpCode) !== String(otpCode)) {
-      return res.status(400).json({ message: 'Invalid OTP code' });
+    // ডিবাগ করার জন্য টার্মিনালে প্রিন্ট হবে
+    console.log("--- OTP Verification Check ---");
+    console.log("DB OTP:", user.otpCode, " | Input OTP:", otpCode);
+    console.log("DB Expire:", user.otpExpire, " | Current Time:", Date.now());
+
+    if (!user.otpCode) {
+      return res.status(400).json({ message: 'No OTP found for this user. Please register again.' });
     }
 
     if (user.otpExpire < Date.now()) {
       return res.status(400).json({ message: 'OTP code has expired. Please register again or request a new one.' });
+    }
+
+    if (String(user.otpCode).trim() !== String(otpCode).trim()) {
+      return res.status(400).json({ message: 'Invalid OTP code' });
     }
 
     // ভেরিফিকেশন সফল হলে
@@ -111,7 +135,6 @@ exports.verifyOtp = async (req, res) => {
     user.otpExpire = undefined;
     await user.save();
 
-    // টোকেন জেনারেট করে দেওয়া যাতে ভেরিফায়ার পর সরাসরি ড্যাশবোর্ডে চলে যেতে পারে
     const token = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET || 'your_super_secret_key_here',
@@ -146,7 +169,6 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: 'Invalid Email or Password' });
     }
 
-    // ভেন্ডর হলে একাউন্ট ওটিপি ভেরিফাইড কিনা চেক করা
     if ((user.role === 'vendor' || user.role === 'seller') && !user.isVerified) {
       return res.status(400).json({ 
         message: 'Please verify your account with the OTP sent to your email first.',
