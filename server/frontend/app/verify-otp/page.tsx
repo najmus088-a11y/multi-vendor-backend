@@ -19,13 +19,13 @@ function VerifyOtpContent() {
     setLoading(true);
 
     try {
-      // ডায়নামিক API URL সেটআপ
+      // ডায়নামিক API URL সেটআপ
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
       const response = await fetch(`${API_URL}/api/auth/verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, otpCode: otp }) // এখানে otp পরিবর্তন করে otpCode করা হয়েছে
+        body: JSON.stringify({ email, otp })
       });
 
       const data = await response.json();
